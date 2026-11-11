@@ -17,12 +17,7 @@
 1. **启动模型入口**：`node src/mcp-bundled.mjs --data-dir <每企业一个目录> --enterprise <企业ID> [--mode production] [--learning off]`，注册为该企业主控的内置 MCP。企业 ID 必须由宿主指定，模型无法更改。
 2. **管理入口放在宿主已认证的 UI/API 后面**：在宿主进程里 `startBundled(...)`（与上面同一目录，SQLite WAL 支持两个进程同时打开），用 `admin('observe'|'inquiry'|'queue'|'evaluate_shadow'|'approve'|'publish'|'rollback'|'learning'|'pause'|'status'|'doctor'|…, input, actor)`。**不要**把 `admin` 暴露给模型或任何模型可调用的工具。
 3. **身份与会签**：`actor` 会写入审计日志。建议宿主在自己的授权层规定谁可 `approve`、谁可 `publish`，且两者不能是同一人（本模块目前不强制）。
-4. **回执关卡（最重要）**：MCP 只是"自愿调用"。凡是外发邮件、写入线索库、提交 business-loop 成果这类动作，宿主应在执行前要求带上 `caseId`，并调用 `service.model('receipt', { caseId })`：
-   - `found:false` → 拒绝（说明买家没有经过筛选器）；
-   - `label` 不是 `eligible` → 拒绝或转人工；
-   - `isCurrentRelease:false` → 按宿主策略重新筛选或放行并记录；
-   - `paused:true` → 拒绝新动作。
-   这样"模型跳过筛选器"会变成可拒绝的事件，而不是静默绕过。
+4. **执行前关卡**：MCP 只是"自愿调用"。外发邮件、写入线索库、提交 business-loop 成果前，宿主必须自行调用 `service.checkExecution(request, authenticatedActor)` 并强制执行返回结果。该入口绑定企业、实际买家输入、case、动作和 payload 哈希，并拒绝缺失、不合格、被人工否定、输入变更、旧版本或暂停状态。`learning_receipt` 仅供查询，不能作为放行凭据。完整字段、示例和并发边界见 [EXECUTION-GATE.md](EXECUTION-GATE.md)。**本仓库提供了关卡实现，尚未接入真实宿主的外发路径。**
 5. **健康检查**：定期调用 `service.health()`（= `doctor`）：schema 版本、SQLite 完整性、审计链、当前策略。任何一项 `ok:false` 应告警并 `pause`。
 
 ## 默认安全状态

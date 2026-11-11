@@ -16,15 +16,20 @@ export function startBundled({ dataDir, enterpriseId, mode = 'production', learn
   dataDir = resolve(dataDir); mkdirSync(dataDir, { recursive: true, mode: 0o700 });
   const store = new LearningStore(join(dataDir, 'learning.sqlite'), { enterpriseId, mode, learning, ...(initialPolicy ? { initialPolicy } : {}) });
   let closed = false;
+  const ensureOpen = () => insist(!closed, 'CLOSED', 'Service is closed', 409);
+  const model = (action, input = {}) => { ensureOpen(); return modelAction(store, action, input); };
+  const admin = (action, input, actor) => { ensureOpen(); text(actor, 'authenticated actor', 120); return ownerAction(store, action, input ?? {}, actor); };
   return {
     enterpriseId, mode,
     /** JSON-RPC handler for the model-facing MCP tools (stdio or any transport the host provides). */
-    mcp: rpcHandler((action, input) => modelAction(store, action, input)),
-    /** Direct model action, e.g. for a host-side gate: admin-free, read-only `receipt` is the intended use. */
-    model: (action, input = {}) => modelAction(store, action, input),
+    mcp: rpcHandler(model),
+    /** Model-safe actions; receipt lookup is informational, not execution authorization. */
+    model,
     /** Owner/admin action performed by an identity the host has authenticated. `actor` is recorded in the audit log. */
-    admin(action, input, actor) { text(actor, 'authenticated actor', 120); insist(!closed, 'CLOSED', 'Service is closed', 409); return ownerAction(store, action, input ?? {}, actor); },
-    health: () => store.doctor(),
+    admin,
+    /** Host-only, freshly evaluated screening check, with an audit entry for each decision. */
+    checkExecution: (input, actor) => admin('check_execution', input, actor),
+    health: () => { ensureOpen(); return store.doctor(); },
     close() { if (!closed) { closed = true; store.close(); } },
   };
 }
