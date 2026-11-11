@@ -2,9 +2,9 @@ import { DatabaseSync } from 'node:sqlite';
 import { chmodSync, existsSync, lstatSync, mkdirSync, realpathSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { randomUUID } from 'node:crypto';
-import { buyer, canonical, classify, digest, identifier, insist, measure, object, observation, policy, text, truthOf } from './domain.mjs';
+import { buyer, canonical, classify, digest, identifier, insist, measure, object, observation, policy, text, truthOf, wilson, binomialTail, OUTCOME_EVENTS } from './domain.mjs';
 
-const TABLES = new Set(['observations', 'candidates', 'reports', 'approvals', 'releases', 'cases']);
+const TABLES = new Set(['observations', 'candidates', 'reports', 'approvals', 'releases', 'cases', 'queue', 'outcomes']);
 const now = () => new Date().toISOString();
 const newid = prefix => `${prefix}-${randomUUID()}`;
 const DEFAULT_POLICY = { allowedRoles: ['brand', 'distributor', 'importer', 'retailer'], requireIntent: false };
@@ -32,6 +32,9 @@ export class LearningStore {
       CREATE TABLE IF NOT EXISTS approvals(id TEXT PRIMARY KEY,candidate_id TEXT NOT NULL,report_id TEXT NOT NULL,body TEXT NOT NULL,sha TEXT NOT NULL,UNIQUE(candidate_id,report_id));
       CREATE TABLE IF NOT EXISTS releases(id TEXT PRIMARY KEY,body TEXT NOT NULL,sha TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS cases(id TEXT PRIMARY KEY,input_hash TEXT NOT NULL,body TEXT NOT NULL,sha TEXT NOT NULL);
+      CREATE TABLE IF NOT EXISTS queue(id TEXT PRIMARY KEY,body TEXT NOT NULL,sha TEXT NOT NULL);
+      CREATE TABLE IF NOT EXISTS outcomes(id TEXT PRIMARY KEY,case_id TEXT NOT NULL,body TEXT NOT NULL,sha TEXT NOT NULL);
+      CREATE INDEX IF NOT EXISTS outcomes_case ON outcomes(case_id);
       CREATE TABLE IF NOT EXISTS audit(seq INTEGER PRIMARY KEY,at TEXT NOT NULL,type TEXT NOT NULL,actor TEXT NOT NULL,body TEXT NOT NULL,previous_hash TEXT NOT NULL,hash TEXT NOT NULL);`);
     try {
       this.transaction(() => {
@@ -209,7 +212,8 @@ export class LearningStore {
     insist(report.candidateId === candidateId && report.candidateHash === digest(candidate), 'REPORT_MISMATCH', 'Evaluation does not match candidate', 409);
     insist(report.passed, 'EVALUATION_FAILED', 'Failed evaluation cannot be approved', 409);
     insist(candidate.baseReleaseId === this.active().id, 'STALE_BASE', 'Active policy changed', 409);
-    insist(report.corpusHash === this.corpusHash(), 'STALE_EVALUATION', 'Evidence corpus changed; evaluate again', 409);
+    // A shadow report is a fixed snapshot of prospective cases, so later labels do not invalidate it; a holdout report does.
+    insist(report.kind === 'shadow' || report.corpusHash === this.corpusHash(), 'STALE_EVALUATION', 'Evidence corpus changed; evaluate again', 409);
     return { candidate, report };
   }
   approve({ candidateId, reportId, candidateHash }, actor) {
@@ -264,17 +268,143 @@ export class LearningStore {
       const existing = this.get('cases', id);
       if (existing) {
         insist(digest(existing.input) === digest(input) && existing.releaseId === expectedReleaseId, 'ID_CONFLICT', 'Case id/release/input conflict', 409);
-        return { ...existing, duplicate: true };
+        return { ...this.publicCase(existing), duplicate: true };
       }
       insist(!this.paused(), 'PAUSED', 'New classifications are paused', 409);
       insist(this.db.prepare('SELECT COUNT(*) AS n FROM cases').get().n < 10000, 'CASE_LIMIT', 'Pilot run limit reached', 409);
       const release = this.active(); insist(release.id === expectedReleaseId, 'STALE_RELEASE', 'Read current context and retry with a new case id', 409);
-      const value = { id, enterpriseId: this.enterpriseId, input, releaseId: release.id, policyHash: digest(release.policy), result: classify(release.policy, input), createdAt: now(), scope: this.mode };
-      this.insert('cases', value, { input_hash: digest(input) }); this.audit('classified', 'worker', { id, releaseId: release.id }); return value;
+      const shadow = this.shadowFor(release, input);
+      const value = { id, enterpriseId: this.enterpriseId, input, releaseId: release.id, policyHash: digest(release.policy), result: classify(release.policy, input), ...(shadow ? { shadow } : {}), createdAt: now(), scope: this.mode };
+      this.insert('cases', value, { input_hash: digest(input) }); this.audit('classified', 'worker', { id, releaseId: release.id }); return this.publicCase(value);
     });
+  }
+
+  /** The shadow answer is never shown to the worker/model: it could be gamed and must not steer live work. */
+  publicCase(c) { const { shadow, ...rest } = c; return rest; }
+  shadowFor(release, input) {
+    const id = this.meta('shadow'); if (!id) return null;
+    const c = this.get('candidates', id);
+    if (!c || c.baseReleaseId !== release.id) return null;
+    return { candidateId: id, policyHash: digest(c.policy), result: classify(c.policy, input) };
+  }
+  /** Run a candidate silently beside the active policy on live cases. Pass candidateId=null to stop. */
+  setShadow({ candidateId }, actor) {
+    text(actor, 'operator identity', 120);
+    return this.transaction(() => {
+      if (candidateId === null) { this.setMeta('shadow', ''); this.audit('shadow_stopped', actor, {}); return { shadow: null }; }
+      identifier(candidateId);
+      const c = this.get('candidates', candidateId); insist(c, 'NOT_FOUND', 'Candidate not found', 404);
+      insist(c.baseReleaseId === this.active().id, 'STALE_BASE', 'Candidate baseline is no longer active', 409);
+      insist(!this.paused(), 'PAUSED', 'Learning is paused', 409);
+      this.setMeta('shadow', candidateId); this.audit('shadow_started', actor, { candidateId, policyHash: digest(c.policy) });
+      return { shadow: candidateId };
+    });
+  }
+  /**
+   * Prospective, paired evaluation. Only cases classified AFTER the candidate began shadowing and labeled by a human count,
+   * companies behind the candidate's own evidence are excluded, and each company counts once. Active vs candidate are compared
+   * on the human-verified facts; only cases where they disagree carry information, so a sign test on those is used.
+   */
+  evaluateShadow(candidateId, actor) {
+    identifier(candidateId);
+    return this.transaction(() => {
+      const candidate = this.get('candidates', candidateId); insist(candidate, 'NOT_FOUND', 'Candidate not found', 404);
+      const base = this.active(); insist(candidate.baseReleaseId === base.id, 'STALE_BASE', 'Candidate baseline changed', 409);
+      const corpus = this.corpus(), byCase = new Map(corpus.map(r => [r.caseId, r]));
+      const excluded = new Set(corpus.filter(r => candidate.evidenceIds.includes(r.id)).map(r => truthOf(r).companyId));
+      const seen = new Set(), rows = [], runs = [];
+      for (const c of this.all('cases')) {
+        if (c.shadow?.candidateId !== candidateId || c.releaseId !== base.id) continue;
+        const r = byCase.get(c.id); if (!r) continue;
+        const company = truthOf(r).companyId; if (excluded.has(company) || seen.has(company)) continue;
+        seen.add(company); rows.push(r); runs.push(c.id);
+      }
+      const corpusHash = digest({ candidate: digest(candidate), base: base.id, rows: rows.map(r => [r.id, r.label, digest(truthOf(r))]) });
+      const old = this.db.prepare('SELECT body,sha FROM reports WHERE candidate_id=? AND corpus_hash=?').get(candidateId, corpusHash);
+      if (old) return this.decode(old);
+      const need = this.mode === 'production' ? { rows: 100, decisive: 10 } : { rows: 6, decisive: 3 };
+      const paired = { wins: 0, losses: 0, ties: 0, recallGains: 0, recallLosses: 0 };
+      for (const r of rows) {
+        const t = truthOf(r), b = classify(base.policy, t).label, n = classify(candidate.policy, t).label;
+        if (b === n) continue;
+        if (n === r.label) paired.wins++; else if (b === r.label) paired.losses++; else paired.ties++;
+        if (r.label === 'eligible') { if (n === 'eligible') paired.recallGains++; if (b === 'eligible') paired.recallLosses++; }
+      }
+      const decisive = paired.wins + paired.losses, pValue = binomialTail(decisive, paired.wins);
+      const baseline = measure(base.policy, rows), proposed = measure(candidate.policy, rows), reasons = [];
+      if (rows.length < need.rows) reasons.push('not_enough_prospective_labeled_cases');
+      if (decisive < need.decisive) reasons.push('not_enough_disagreements');
+      if (!(paired.wins > paired.losses)) reasons.push('no_paired_improvement');
+      if (pValue > 0.05) reasons.push('not_statistically_significant');
+      if (paired.recallLosses > paired.recallGains) reasons.push('eligible_recall_regressed');
+      if (proposed.falsePositive > baseline.falsePositive) reasons.push('false_positives_regressed');
+      if (this.mode === 'production' && rows.some(r => r.kind !== 'real')) reasons.push('synthetic_corpus');
+      const report = { id: newid('eval'), kind: 'shadow', candidateId, candidateHash: digest(candidate), baseReleaseId: base.id, corpusHash,
+        cases: runs.length, baseline, proposed, paired: { ...paired, decisive, pValue }, passed: reasons.length === 0, reasons, scope: this.mode, evaluatedAt: now(), actor,
+        meaning: 'Prospective paired comparison on human-labeled live cases. Not evidence of revenue, response-rate lift, or generalization beyond this enterprise and period.' };
+      this.insert('reports', report, { candidate_id: candidateId, corpus_hash: corpusHash });
+      this.audit('evaluated_shadow', actor, { reportId: report.id, passed: report.passed }); return report;
+    });
+  }
+  /**
+   * Daily human review list. A uniform random slice of ALL pending cases is always reserved so accuracy can be estimated without
+   * bias; the rest favors cases where active and shadow disagree, then needs_review. Ordering is a hash of (seed, caseId): reproducible, not gameable by the model.
+   */
+  reviewQueue({ size = 40, seed } = {}, actor) {
+    insist(Number.isInteger(size) && size >= 1 && size <= 500, 'INVALID_SIZE', 'size must be 1-500');
+    seed = text(seed ?? new Date().toISOString().slice(0, 10), 'seed', 80); text(actor, 'operator identity', 120);
+    return this.transaction(() => {
+      const labeled = new Set(this.db.prepare('SELECT case_id FROM observations').all().map(r => r.case_id));
+      const queued = new Set(this.all('queue').map(q => q.id));
+      const rank = c => digest(`${seed}:${c.id}`);
+      const pending = this.all('cases').filter(c => !labeled.has(c.id) && !queued.has(c.id)).map(c => ({ c, k: rank(c) })).sort((a, b) => a.k < b.k ? -1 : 1);
+      const picked = new Map(), take = (list, n, stratum) => { for (const { c } of list) { if (n <= 0) break; if (!picked.has(c.id)) { picked.set(c.id, stratum); n--; } } };
+      const disagree = pending.filter(({ c }) => c.shadow && c.shadow.result.label !== c.result.label), review = pending.filter(({ c }) => c.result.label === 'needs_review');
+      take(pending, Math.ceil(size * 0.1), 'random');
+      take(disagree, Math.ceil(size * 0.6), 'disagreement');
+      take(review, Math.ceil(size * 0.3), 'needs_review');
+      for (const [list, stratum] of [[disagree, 'disagreement'], [review, 'needs_review'], [pending, 'other']]) take(list, size - picked.size, stratum);
+      const items = [...picked].slice(0, size).map(([caseId, stratum]) => ({ caseId, stratum }));
+      const issuedAt = now();
+      for (const it of items) this.insert('queue', { id: it.caseId, stratum: it.stratum, seed, issuedAt, actor });
+      this.audit('queue_issued', actor, { seed, count: items.length });
+      return { seed, pending: pending.length, issued: items.length, items };
+    });
+  }
+  /** End-to-end accuracy from the random stratum only, the one slice with no selection bias. */
+  calibration() {
+    const byCase = new Map(this.corpus().map(r => [r.caseId, r])); let n = 0, correct = 0;
+    for (const q of this.all('queue')) {
+      if (q.stratum !== 'random') continue;
+      const r = byCase.get(q.id), c = this.get('cases', q.id); if (!r || !c) continue;
+      n++; correct += Number(c.result.label === r.label);
+    }
+    return { random: n, correct, accuracy: n ? correct / n : null, interval95: wilson(correct, n) };
+  }
+  /** A salesperson-confirmed inquiry or a customer reply, tied to the case (and so the exact policy version) that produced it. */
+  recordOutcome(raw, actor) {
+    object(raw, ['id', 'caseId', 'event', 'note'], ['id', 'caseId', 'event']);
+    identifier(raw.id); identifier(raw.caseId); text(actor, 'operator identity', 120);
+    insist(OUTCOME_EVENTS.includes(raw.event), 'INVALID_EVENT', `event must be one of ${OUTCOME_EVENTS.join(', ')}`);
+    const note = raw.note === undefined ? undefined : text(raw.note, 'note', 500);
+    return this.transaction(() => {
+      insist(this.get('cases', raw.caseId), 'NOT_FOUND', 'Case not found', 404);
+      const value = { id: raw.id, caseId: raw.caseId, event: raw.event, ...(note ? { note } : {}), actor, recordedAt: now() };
+      const old = this.get('outcomes', raw.id);
+      if (old) { insist(old.caseId === value.caseId && old.event === value.event && old.note === value.note, 'ID_CONFLICT', 'Outcome id reused with different content', 409); return { ...old, duplicate: true }; }
+      this.insert('outcomes', value, { case_id: value.caseId }); this.audit('outcome_recorded', actor, { id: value.id, caseId: value.caseId, event: value.event });
+      return { ...value, duplicate: false };
+    });
+  }
+  /** Attribution only: counts per policy version and screening result. Never a gate for publication. */
+  outcomeSummary() {
+    const cases = this.all('cases'), by = new Map(); const cell = c => { const k = `${c.releaseId}|${c.result.label}`; if (!by.has(k)) by.set(k, { releaseId: c.releaseId, label: c.result.label, cases: 0, replied: new Set(), valid: new Set(), invalid: new Set() }); return by.get(k); };
+    const where = new Map(cases.map(c => [c.id, cell(c)])); for (const c of cases) cell(c).cases++;
+    for (const o of this.all('outcomes')) { const t = where.get(o.caseId); if (!t) continue; if (o.event === 'customer_reply') t.replied.add(o.caseId); else if (o.event === 'valid_inquiry') t.valid.add(o.caseId); else t.invalid.add(o.caseId); }
+    return [...by.values()].map(t => ({ releaseId: t.releaseId, label: t.label, cases: t.cases, replied: t.replied.size, validInquiries: t.valid.size, invalidInquiries: t.invalid.size, validInquiryRate: t.cases ? t.valid.size / t.cases : null, interval95: wilson(t.valid.size, t.cases) }));
   }
   status() {
     return { enterpriseId: this.enterpriseId, mode: this.mode, paused: this.paused(), active: this.active(),
-      audit: this.verifyAudit(), observations: this.db.prepare('SELECT split,COUNT(*) AS n FROM observations GROUP BY split').all(), candidates: this.all('candidates'), reports: this.all('reports'), approvals: this.all('approvals'), releases: this.all('releases') };
+      audit: this.verifyAudit(), shadow: this.meta('shadow') || null, calibration: this.calibration(), outcomes: this.outcomeSummary(), observations: this.db.prepare('SELECT split,COUNT(*) AS n FROM observations GROUP BY split').all(), candidates: this.all('candidates'), reports: this.all('reports'), approvals: this.all('approvals'), releases: this.all('releases') };
   }
 }

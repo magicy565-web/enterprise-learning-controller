@@ -47,6 +47,10 @@ export function ownerAction(store, action, input, owner) {
   if (action === 'publish') { object(input, ['approvalId', 'expectedActive']); return store.publish(input, owner); }
   if (action === 'rollback') { object(input, ['requestId', 'expectedActive', 'targetReleaseId']); return store.rollback(input, owner); }
   if (action === 'pause') { object(input, ['paused']); return store.pause(input.paused, owner); }
+  if (action === 'shadow') { object(input, ['candidateId']); return store.setShadow(input, owner); }
+  if (action === 'evaluate_shadow') { object(input, ['candidateId']); return store.evaluateShadow(input.candidateId, owner); }
+  if (action === 'queue') { object(input, ['size', 'seed'], []); return store.reviewQueue(input, owner); }
+  if (action === 'outcome') return store.recordOutcome(input, owner);
   if (action === 'audit') { object(input, []); return store.verifyAudit(); }
   if (action === 'status') { object(input, []); return store.status(); }
   return modelAction(store, action, input);

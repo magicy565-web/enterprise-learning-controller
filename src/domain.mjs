@@ -90,3 +90,21 @@ export function measure(p, rows) {
   }
   return { ...out, accuracy: out.total ? out.correct / out.total : 0, recall: out.eligible ? out.truePositive / out.eligible : 0 };
 }
+
+/** Wilson score interval for a proportion; honest about small samples. */
+export function wilson(k, n, z = 1.96) {
+  if (!n) return { low: 0, high: 1 };
+  const p = k / n, d = 1 + z * z / n, c = p + z * z / (2 * n), m = z * Math.sqrt(p * (1 - p) / n + z * z / (4 * n * n));
+  return { low: Math.max(0, (c - m) / d), high: Math.min(1, (c + m) / d) };
+}
+/** One-sided exact sign-test p-value: P(X >= k) for X ~ Binomial(n, 0.5). */
+export function binomialTail(n, k) {
+  if (k <= 0) return 1;
+  if (k > n) return 0;
+  const lf = [0];
+  for (let i = 1; i <= n; i++) lf[i] = lf[i - 1] + Math.log(i);
+  let sum = 0;
+  for (let i = k; i <= n; i++) sum += Math.exp(lf[n] - lf[i] - lf[n - i] - n * Math.LN2);
+  return Math.min(1, sum);
+}
+export const OUTCOME_EVENTS = ['customer_reply', 'valid_inquiry', 'invalid_inquiry'];
