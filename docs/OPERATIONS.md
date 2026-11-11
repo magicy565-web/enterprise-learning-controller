@@ -57,7 +57,8 @@ split：`train | holdout`，由独立审核人预先决定，不能为了得到�
 2. **每日审核队列** `queue` `{"size":40,"seed":"2026-11-12"}`：返回今天要审的 caseId 及分层。至少 10% 是从全部待审案例中均匀随机抽取（用于无偏估计准确率）；其余优先"现行与候选有分歧"的案例，再是 `needs_review`。排序由 `seed+caseId` 的哈希决定，可复现；已发出的案例不会重复发出。业务员审完后照常 `observe`。
 3. **前瞻性配对评估** `evaluate_shadow` `{"candidateId":"…"}`：只统计候选开始影子运行**之后**产生、且已被人工标注的案例；候选自身证据涉及的公司排除，同一公司只计一次；在人工核实后的事实上比较两版，只看分歧案例并做精确符号检验（单侧 p≤0.05）。另要求合格买家召回不下降、误报不增加；生产模式至少 100 个前瞻标注案例、10 个有结论的分歧（测试模式 6 / 3）。通过后走原有 `approve` → `publish`；影子报告是固定快照，之后继续到来的新标签不会使审批失效。
 4. **结果信号** `outcome` `{"id":"…","caseId":"…","event":"customer_reply|valid_inquiry|invalid_inquiry","note":"…"}`：登记客户回复、业务员确认的有效/无效询盘。`status` 的 `outcomes` 按"策略版本 × 筛选结果"汇总案例数、回复数、有效询盘数及 95% 区间。**仅用于归因观察，不作为发布闸门**：回复和询盘有延迟且噪声大。
-5. `status.calibration`：只用随机分层案例计算的端到端准确率及 95% Wilson 区间——模型抽取加现行规则对比业务员标签。
+5. **询盘判断** `inquiry`：业务员对一条真实询盘的判断。字段：`id, caseId, verdict(valid|invalid), reason(仅 invalid), text(询盘内容), ref(CRM 来源ID)`，可选 `reviewer, kind, split, corrected`。买家输入取自系统已记录的 case，调用方不能传。映射规则：`valid` → 合格买家；`invalid + wrong_buyer_role` → 角色不对；`invalid + no_purchase_intent` → 意向未核实；`not_target_product / spam_or_irrelevant / duplicate / other` **只记为结果，不进入学习**（它们不说明买家筛选规则有误）。若同时给了 `corrected`，记为抽取错误。split 默认按公司哈希稳定分配（约 20% holdout）。同一 case 只能有一个买家标签；重复提交同一 id 安全。批量导入见 `scripts/import-inquiries.mjs`，试跑流程见 `docs/TRIAL-RUNBOOK.md`。
+6. `status.calibration`：只用随机分层案例计算的端到端准确率及 95% Wilson 区间——模型抽取加现行规则对比业务员标签。
 
 要点：配对检验只依赖分歧案例，几十到上百个分歧即可得出结论，远少于直接比较准确率所需的样本。其效力仍取决于业务员标签的一致性。
 
