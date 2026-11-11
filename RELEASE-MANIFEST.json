@@ -1,0 +1,128 @@
+{
+  "name": "enterprise-learning-controller",
+  "version": "0.1.0",
+  "files": [
+    {
+      "path": ".github/workflows/ci.yml",
+      "bytes": 502,
+      "sha256": "c2c1944945651d137fa969177841b66689ea72df4b42fe65a4f6c1e4bfaa7466"
+    },
+    {
+      "path": ".gitignore",
+      "bytes": 91,
+      "sha256": "8bb143e24ebee46ad90688f61df473656e72870012c41baef4d31478564a6605"
+    },
+    {
+      "path": "README.md",
+      "bytes": 11175,
+      "sha256": "514683d77fa4af4de62808e12aeaaaf1af0182705ee25f1440b7a6641afe1d94"
+    },
+    {
+      "path": "deploy/enterprise-learning.service.example",
+      "bytes": 699,
+      "sha256": "a78924deddfed3b3e789824b16021825acc1242f702d632a9d326f6eb7577c28"
+    },
+    {
+      "path": "docs/OPERATIONS.md",
+      "bytes": 3803,
+      "sha256": "3f9d7406378395e5be9b85e2fcb147e1eff62a6dfc0c9642f144fdd200a7039b"
+    },
+    {
+      "path": "docs/SECURITY.md",
+      "bytes": 2474,
+      "sha256": "7d543f2c93352293bac13def1258387960dcb7b8f69a1e3844b7658b790c4168"
+    },
+    {
+      "path": "docs/TEST-REPORT.md",
+      "bytes": 4260,
+      "sha256": "70dfa81f900199fa65e9e74a444b0f0520901c621d04e7b5face94448a591bee"
+    },
+    {
+      "path": "package.json",
+      "bytes": 323,
+      "sha256": "5a27e833ee06ec7339ab1ab70e9d0ced52fac1ce24137bd1ded2c612dd8cba8b"
+    },
+    {
+      "path": "skills/enterprise-learning-controller.md",
+      "bytes": 2561,
+      "sha256": "4fefc35dcca957191702cb858059602bdde64f6d92a044a7a67452b943aaf46b"
+    },
+    {
+      "path": "src/cli.mjs",
+      "bytes": 3239,
+      "sha256": "b59e1cae6567a9f28a4541841d53909ded8e2e198f08607875b6b7f1d6f1564e"
+    },
+    {
+      "path": "src/domain.mjs",
+      "bytes": 5296,
+      "sha256": "e2a9ab0763677dd4a8e9234d12471e48c054ecaf203e8cf7e4cad54bdf2ef040"
+    },
+    {
+      "path": "src/import-review.mjs",
+      "bytes": 2679,
+      "sha256": "90d0f91f06f6b71975ca89d0e72f7116fadfce4b3c45bde76dbe7137cb4478e5"
+    },
+    {
+      "path": "src/install.mjs",
+      "bytes": 6262,
+      "sha256": "f7d2fe08404048313102b64e0b876f1278b0738f286e8bd33d7ee8840ca2818b"
+    },
+    {
+      "path": "src/mcp.mjs",
+      "bytes": 5395,
+      "sha256": "5defe96c0750dcab208a0648b4aad2ad6f6cf82cb3c80c4719119c827e8eaaf0"
+    },
+    {
+      "path": "src/server.mjs",
+      "bytes": 6440,
+      "sha256": "5af9bbd0dd2fb9905737e93b46bec33ff8cda78b2f8285a11bc1077dbde5f822"
+    },
+    {
+      "path": "src/store.mjs",
+      "bytes": 22059,
+      "sha256": "4cdf512228e4b5ab3d7582ed01dae7ea49882d421b3e0f84e12fd4e627530927"
+    },
+    {
+      "path": "src/transport.mjs",
+      "bytes": 1603,
+      "sha256": "be4494546aa286ee77d317bc9baababe893d01300ee3aaa88af4b1d75119e0e3"
+    },
+    {
+      "path": "test/helpers.mjs",
+      "bytes": 1570,
+      "sha256": "3c5375bca74b23f4d2dfdf15be81be4285b39b44c6cc9bbbc6aca7f934356fd9"
+    },
+    {
+      "path": "test/install.test.mjs",
+      "bytes": 4972,
+      "sha256": "109979dec33e99a6d66fafc9bf7cf864bc5559a520abb1a05c8d5c6a5077d127"
+    },
+    {
+      "path": "test/integration.test.mjs",
+      "bytes": 9685,
+      "sha256": "440bc20f3147770568af9ac110170b3e01d6f4d71d4ec0525922ae8c09491636"
+    },
+    {
+      "path": "test/store.test.mjs",
+      "bytes": 11403,
+      "sha256": "65266fb8a8a8a79f70301c289d6b08c6c1a080e3831d1d7599e3202b71263cab"
+    },
+    {
+      "path": "test/verify-e2e.mjs",
+      "bytes": 4762,
+      "sha256": "2468cbd1b5be1483647b0245d4325990ee269e7e70f58807fd58ced3aa91bed4"
+    }
+  ],
+  "secret_scan": [],
+  "unit_tests": {
+    "pass": 60,
+    "fail": 0,
+    "skip": 0
+  },
+  "e2e": {
+    "isolated": true,
+    "passed": true,
+    "synthetic_data": true
+  },
+  "code_reference": "original supplied v0.1.0 artifact"
+}

@@ -1,0 +1,25 @@
+# Example only; NOT installed or tested against the user's server.
+# Requires a dedicated unprivileged elc-data account and a verified Node executable.
+[Unit]
+Description=Enterprise Learning Controller sidecar
+After=network.target
+
+[Service]
+Type=simple
+User=elc-data
+Group=elc-data
+WorkingDirectory=/opt/enterprise-learning
+ExecStart=/usr/bin/node /opt/enterprise-learning/src/server.mjs --config /var/lib/enterprise-learning/server.json
+Restart=on-failure
+RestartSec=5
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/enterprise-learning
+RestrictAddressFamilies=AF_INET AF_UNIX
+
+[Install]
+WantedBy=multi-user.target
