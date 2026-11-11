@@ -108,3 +108,19 @@ export function binomialTail(n, k) {
   return Math.min(1, sum);
 }
 export const OUTCOME_EVENTS = ['customer_reply', 'valid_inquiry', 'invalid_inquiry'];
+
+export const INVALID_REASONS = ['wrong_buyer_role', 'no_purchase_intent', 'not_target_product', 'spam_or_irrelevant', 'duplicate', 'other'];
+/**
+ * A salesperson judges one concrete inquiry. Only some verdicts say something about the BUYER screening policy; the rest
+ * (wrong product, spam, duplicate...) are real outcomes but must not teach the policy anything, so they map to null.
+ */
+export function inquiryLabel({ verdict, reason, corrected }) {
+  let mapped = null;
+  if (verdict === 'valid') mapped = { label: 'eligible', reason: 'suitable_buyer' };
+  else if (reason === 'wrong_buyer_role') mapped = { label: 'ineligible', reason: 'wrong_buyer_role' };
+  else if (reason === 'no_purchase_intent') mapped = { label: 'needs_review', reason: 'intent_not_verified' };
+  if (mapped && corrected) mapped = { label: mapped.label, reason: 'extraction_error' };   // the model also mis-extracted the buyer
+  return mapped;
+}
+/** Stable company-level split (~20% holdout) so one company never lands on both sides. */
+export function splitFor(companyId) { return parseInt(digest(companyId).slice(0, 8), 16) % 5 === 0 ? 'holdout' : 'train'; }

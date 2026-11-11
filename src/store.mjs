@@ -2,9 +2,9 @@ import { DatabaseSync } from 'node:sqlite';
 import { chmodSync, existsSync, lstatSync, mkdirSync, realpathSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { randomUUID } from 'node:crypto';
-import { buyer, canonical, classify, digest, identifier, insist, measure, object, observation, policy, text, truthOf, wilson, binomialTail, OUTCOME_EVENTS } from './domain.mjs';
+import { buyer, canonical, classify, digest, identifier, insist, measure, object, observation, policy, text, truthOf, wilson, binomialTail, OUTCOME_EVENTS, INVALID_REASONS, inquiryLabel, splitFor } from './domain.mjs';
 
-const TABLES = new Set(['observations', 'candidates', 'reports', 'approvals', 'releases', 'cases', 'queue', 'outcomes']);
+const TABLES = new Set(['observations', 'candidates', 'reports', 'approvals', 'releases', 'cases', 'queue', 'outcomes', 'inquiries']);
 const now = () => new Date().toISOString();
 const newid = prefix => `${prefix}-${randomUUID()}`;
 const DEFAULT_POLICY = { allowedRoles: ['brand', 'distributor', 'importer', 'retailer'], requireIntent: false };
@@ -34,6 +34,7 @@ export class LearningStore {
       CREATE TABLE IF NOT EXISTS cases(id TEXT PRIMARY KEY,input_hash TEXT NOT NULL,body TEXT NOT NULL,sha TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS queue(id TEXT PRIMARY KEY,body TEXT NOT NULL,sha TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS outcomes(id TEXT PRIMARY KEY,case_id TEXT NOT NULL,body TEXT NOT NULL,sha TEXT NOT NULL);
+      CREATE TABLE IF NOT EXISTS inquiries(id TEXT PRIMARY KEY,case_id TEXT NOT NULL,body TEXT NOT NULL,sha TEXT NOT NULL);
       CREATE INDEX IF NOT EXISTS outcomes_case ON outcomes(case_id);
       CREATE TABLE IF NOT EXISTS audit(seq INTEGER PRIMARY KEY,at TEXT NOT NULL,type TEXT NOT NULL,actor TEXT NOT NULL,body TEXT NOT NULL,previous_hash TEXT NOT NULL,hash TEXT NOT NULL);`);
     try {
@@ -395,6 +396,34 @@ export class LearningStore {
       this.insert('outcomes', value, { case_id: value.caseId }); this.audit('outcome_recorded', actor, { id: value.id, caseId: value.caseId, event: value.event });
       return { ...value, duplicate: false };
     });
+  }
+
+  /**
+   * Record a salesperson's verdict on one real inquiry for a case this system classified. The verdict is always kept as an outcome;
+   * it also becomes a buyer-policy training label only when it says something about the buyer (see inquiryLabel). The input comes from
+   * the recorded case, never from the caller. Replaying the same inquiry id is safe.
+   */
+  recordInquiry(raw, actor) {
+    object(raw, ['id', 'caseId', 'verdict', 'reason', 'reviewer', 'text', 'ref', 'kind', 'split', 'corrected'], ['id', 'caseId', 'verdict', 'text', 'ref']);
+    identifier(raw.id); identifier(raw.caseId); text(actor, 'operator identity', 120);
+    insist(['valid', 'invalid'].includes(raw.verdict), 'INVALID_VERDICT', 'verdict must be valid or invalid');
+    insist(raw.verdict === 'valid' ? raw.reason === undefined : INVALID_REASONS.includes(raw.reason), 'INVALID_REASON', `An invalid inquiry needs a reason: ${INVALID_REASONS.join(', ')}`);
+    const reviewer = raw.reviewer === undefined ? undefined : text(raw.reviewer, 'reviewer', 120);   // self-declared; not authenticated
+    const kind = raw.kind ?? 'real'; insist(['real', 'synthetic'].includes(kind), 'INVALID_KIND', 'Use real or synthetic');
+    const run = this.get('cases', raw.caseId); insist(run, 'NOT_FOUND', 'Case not found; inquiries attach to cases this system classified', 404);
+    const mapped = inquiryLabel({ verdict: raw.verdict, reason: raw.reason, corrected: raw.corrected });
+    const split = raw.split ?? splitFor(run.input.companyId), evidenceText = text(raw.text, 'inquiry text', 12000), ref = `inquiry:${text(raw.ref, 'inquiry ref', 900)}`;
+    const record = { id: raw.id, caseId: raw.caseId, verdict: raw.verdict, ...(raw.reason ? { reason: raw.reason } : {}), ...(reviewer ? { reviewer } : {}), ref, evidenceHash: digest(evidenceText), mapped: mapped ? { ...mapped, split } : null };
+    const old = this.get('inquiries', raw.id);
+    if (old) insist(digest({ ...old, actor: undefined, recordedAt: undefined, observationId: undefined }) === digest({ ...record, actor: undefined, recordedAt: undefined, observationId: undefined }), 'ID_CONFLICT', 'Inquiry id reused with different content', 409);
+    let observation = null;
+    if (mapped) {   // may throw CASE_CONFLICT / DATA_LEAKAGE / SYNTHETIC_BLOCKED; nothing has been recorded yet in that case
+      observation = this.ingest({ id: `inq-${raw.id}`, caseId: raw.caseId, input: run.input, label: mapped.label, reason: mapped.reason, split, kind,
+        ...(raw.corrected ? { corrected: raw.corrected } : {}), evidence: { ref, text: evidenceText } }, actor);
+    }
+    const outcome = this.recordOutcome({ id: `inq-${raw.id}`, caseId: raw.caseId, event: raw.verdict === 'valid' ? 'valid_inquiry' : 'invalid_inquiry', ...(raw.reason ? { note: `reason:${raw.reason}` } : {}) }, actor);
+    if (!old) this.transaction(() => { this.insert('inquiries', { ...record, actor, recordedAt: now(), observationId: observation?.id ?? null }, { case_id: raw.caseId }); this.audit('inquiry_recorded', actor, { id: raw.id, caseId: raw.caseId, verdict: raw.verdict, mapped: Boolean(mapped) }); });
+    return { id: raw.id, duplicate: Boolean(old), usedForLearning: Boolean(mapped), split: mapped ? split : null, observation, outcomeId: outcome.id };
   }
   /** Attribution only: counts per policy version and screening result. Never a gate for publication. */
   outcomeSummary() {
