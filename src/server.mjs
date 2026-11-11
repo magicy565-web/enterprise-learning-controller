@@ -19,7 +19,9 @@ async function body(req) {
   try { return JSON.parse(Buffer.concat(chunks).toString('utf8')); } catch { throw new DomainError('INVALID_JSON', 'Invalid JSON'); }
 }
 export function modelAction(store, action, input) {
-  if (action === 'context') { object(input, []); return store.context(); }
+  if (action === 'context') { object(input, []); return store.summary(); }
+  if (action === 'examples') { object(input, ['limit', 'offset'], []); return store.examples(input); }
+  if (action === 'receipt') { object(input, ['caseId']); return store.receipt(input.caseId); }
   if (action === 'learn') { object(input, []); return store.learn(); }
   if (action === 'propose') return store.propose(input);
   if (action === 'classify') { object(input, ['id', 'input', 'expectedReleaseId']); return store.runCase(input); }
@@ -57,6 +59,8 @@ export function ownerAction(store, action, input, owner) {
     try { const learned = store.learn(); return { ...receipt, learning: { state: learned.state, ...(learned.candidate ? { candidateId: learned.candidate.id } : {}) } }; }
     catch (error) { return { ...receipt, learning: { state: 'deferred', code: error.code ?? 'LEARNING_FAILED' } }; }
   }
+  if (action === 'learning') { object(input, ['enabled']); return store.setLearning(input.enabled, owner); }
+  if (action === 'doctor') { object(input, []); return store.doctor(); }
   if (action === 'audit') { object(input, []); return store.verifyAudit(); }
   if (action === 'status') { object(input, []); return store.status(); }
   return modelAction(store, action, input);
