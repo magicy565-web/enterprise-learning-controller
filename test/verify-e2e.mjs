@@ -33,6 +33,8 @@ try {
   await rpc('initialize',{protocolVersion:'2025-06-18'});
   const context=await tool('learning_context'),base=context.active;
   const before=await tool('learning_classify',{id:'before',input:input('target'),expectedReleaseId:base.id});
+  const gate=caseId=>ownerCall('check_execution',{enterpriseId:context.enterpriseId,caseId,input:input('target'),operationId:'smoke-operation',action:'lead_write',payloadHash:digest('isolated fixture payload'),expectedMode:'test'});
+  const gateBefore=await gate('before');
   for(let i=0;i<3;i++){
     await ownerCall('observe',obs(`smoke-train-${i}`));
     await ownerCall('observe',obs(`smoke-neg-${i}`,{split:'holdout'}));
@@ -42,10 +44,18 @@ try {
   const approval=await ownerCall('approve',{candidateId:candidate.id,reportId:report.id,candidateHash:digest(candidate)});
   const published=await ownerCall('publish',{approvalId:approval.id,expectedActive:base.id});
   const after=await tool('learning_classify',{id:'after',input:input('target'),expectedReleaseId:published.active});
+  const gateStale=await gate('before'),gateRejected=await gate('after');
   const undo=await ownerCall('rollback',{requestId:'undo-smoke',expectedActive:published.active,targetReleaseId:base.id});
   const restored=await tool('learning_classify',{id:'restored',input:input('target'),expectedReleaseId:undo.active});
+  const gateRestored=await gate('restored');
+  await ownerCall('pause',{paused:true});
+  const gatePaused=await gate('restored');
+  insist(gateBefore.allowed&&gateStale.code==='STALE_RECEIPT'&&gateRejected.code==='NOT_ELIGIBLE'&&gateRestored.allowed&&gatePaused.code==='PAUSED','GATE_FAILED','Execution gate did not track lifecycle');
+  const gateResults={before:gateBefore.code,oldReceiptAfterPublication:gateStale.code,afterPublication:gateRejected.code,rollback:gateRestored.code,paused:gatePaused.code};
   insist(before.result.label==='eligible'&&after.result.label==='ineligible'&&restored.result.label==='eligible','WRONG_RESULTS','Evolution/rollback did not change behavior as expected');
   const evidence={scope:'SYNTHETIC_ISOLATED_TEST_ONLY',at:new Date().toISOString(),node:process.version,nativeOpenMausBot:'NOT_RUN',realModel:'NOT_RUN',realBusinessOutcomes:'NOT_CLAIMED',network:'loopback HTTP plus spawned stdio MCP',observations:9,trainingCompanies:3,holdoutCompanies:6,baseline:report.baseline,proposed:report.proposed,evaluationPassed:report.passed,results:{before:before.result.label,after:after.result.label,rollback:restored.result.label},releaseIds:{baseline:base.id,published:published.active,rollback:undo.active},candidateId:candidate.id,reportId:report.id,approvalId:approval.id};
+  evidence.executionGate=gateResults;
+  evidence.hostOutboundIntegration='NOT_RUN';
   if(output){mkdirSync(dirname(output),{recursive:true});writeFileSync(output,JSON.stringify(evidence,null,2)+'\n',{flag:'wx',mode:0o600});}
   console.log(JSON.stringify(evidence,null,2));
 } finally {child?.kill();await app.close();store.close();rmSync(dir,{recursive:true,force:true});}

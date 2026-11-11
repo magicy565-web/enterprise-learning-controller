@@ -6,6 +6,7 @@ import { parseArgs } from 'node:util';
 import { LearningStore } from './store.mjs';
 import { DomainError, digest, identifier, insist, object } from './domain.mjs';
 import { MAX_BODY, readJson } from './transport.mjs';
+import { checkExecution } from './execution-gate.mjs';
 
 function matches(token, expectedHash) {
   if (!/^[0-9a-f]{64}$/.test(token ?? '') || !/^[0-9a-f]{64}$/.test(expectedHash ?? '')) return false;
@@ -32,6 +33,7 @@ export function modelAction(store, action, input) {
   throw new DomainError('FORBIDDEN_ACTION', 'This tool identity cannot label data, inspect holdout, approve, publish, or change permissions', 403);
 }
 export function ownerAction(store, action, input, owner) {
+  if (action === 'check_execution') return checkExecution(store, input, owner);
   if (action === 'observe') {
     const receipt = store.ingest(input, owner);
     // Commit feedback first. A stopped/failed learner never loses an accepted review;

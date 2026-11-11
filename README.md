@@ -4,6 +4,12 @@
 
 本仓库仅包含本模块的通用实现与隔离测试，不包含原有私有 `openmausbot-worker` 仓库的历史文件、客户数据、账户凭据或 OpenMausBot 上游本体。
 
+## 最新分支增量：宿主执行前校验
+
+在内置服务分支之上新增 `service.checkExecution(request, authenticatedActor)` / owner `check_execution`，核对企业、模式、买家输入、当前版本、人工反馈及暂停状态，并记录动作和 payload 哈希。查询回执本身不再作为宿主放行方式。关闭学习后，已有影子规则也停止生成新结果。
+
+本分支已在 Linux / Node.js **24.22.1** 跑通 **125 项测试**及 HTTP + MCP 子进程端到端验证；无需 GitHub Actions。见 [本轮验证记录](docs/verification/receipt-gate.md) 和 [宿主接入契约](docs/EXECUTION-GATE.md)。下文及原 TEST-REPORT 中的 60 项 / Node 22 记录是初版历史验收；Windows、真实 OpenMausBot 接线和真实业务验证仍未执行。
+
 ## 快速验证
 
 ```sh
@@ -19,6 +25,7 @@ npm run verify -- --out ./local-verification.json
 ## 完整文档
 
 - `docs/OPERATIONS.md`：实际操作流程与输入字段
+- `docs/EXECUTION-GATE.md`：宿主执行前校验、拒绝原因、审计与并发边界
 - `docs/SECURITY.md`：企业隔离、权限和部署注意事项
 - `docs/TEST-REPORT.md`：已验证与未验证项
 - `skills/enterprise-learning-controller.md`：主控指令模板
