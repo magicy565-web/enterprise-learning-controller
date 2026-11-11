@@ -33,6 +33,8 @@ npm run verify -- --out ./local-verification.json
 
 ## 已实现
 
+> **作为宿主内置服务使用请看 `docs/BUNDLED.md`**（`src/bundled.mjs`、`src/mcp-bundled.mjs`：首次启动自动初始化与迁移、默认只观察不学习、管理操作由宿主传入已认证身份、回执校验接口）。`install.mjs` 与独立 HTTP sidecar 仍保留，适用于不内置的场景。
+
 > 本分支新增：影子运行与前瞻性配对评估（`shadow`/`evaluate_shadow`）、每日审核队列与随机校准（`queue`）、客户回复/询盘结果登记（`outcome`）；上一分支：`extraction_error` 人工更正（区分抽取错误与策略错误）、`audit` 审计链校验、companyId 规范化。详见 `docs/OPERATIONS.md`。
 
 * 人工反馈和原始证据持久化；重复事件幂等，冲突拒绝，企业实例绑定。
