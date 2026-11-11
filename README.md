@@ -33,6 +33,8 @@ npm run verify -- --out ./local-verification.json
 
 ## 已实现
 
+> 本分支新增：`extraction_error` 人工更正（区分抽取错误与策略错误）、`audit` 审计链校验、companyId 规范化。详见 `docs/OPERATIONS.md`。
+
 * 人工反馈和原始证据持久化；重复事件幂等，冲突拒绝，企业实例绑定。
 * 收到第三家独立公司的同类人工纠正后，自动生成受限候选；证据冲突时不泛化。
 * 主控可用自己正在运行的模型调用 `learning_propose`；无需新增模型账号。模型只能提出受限策略，不能发布。

@@ -31,7 +31,23 @@
 role：`retailer | distributor | importer | brand | unknown`。label：`eligible | ineligible | needs_review`。reason：`wrong_buyer_role | suitable_buyer | intent_not_verified | other`。
 split：`train | holdout`，由独立审核人预先决定，不能为了得到好成绩事后挑选。kind=`real` 是管理员的来源声明，不是软件能认证的真实性证明；系统不会伪称可以从这个字段核验原文真的来自企业。
 
-稳定 companyId 通常使用已人工规范的公司域名。软件进行大小写与格式规范化，不会自动识别不同域名背后是同一集团；这部分需要标注者控制。相同 case 标签不可覆盖。v0.1 不提供删除/撤销标签的公开接口；错误标签需要停用对应评估集并由维护人员做有审计的数据迁移，不能直接改数据库凑分数。
+稳定 companyId 通常使用已人工规范的公司域名。软件进行大小写、末尾点号与开头 `www.` 的规范化，不会自动识别不同域名背后是同一集团；这部分需要标注者控制。相同 case 标签不可覆盖。v0.1 不提供删除/撤销标签的公开接口；错误标签需要停用对应评估集并由维护人员做有审计的数据迁移，不能直接改数据库凑分数。
+
+### 抽取错误更正（extraction_error）
+
+`input` 必须等于模型当时实际运行时使用的输入。如果审核员发现是**模型抽取错了**（例如把进口商抽成 `retailer`），不要标 `wrong_buyer_role`，而是：`reason: "extraction_error"`，并在 `corrected` 字段给出人工核实后的完整 buyer 对象（同一 companyId，内容必须与 `input` 不同），`label` 针对核实后的事实。
+
+```json
+{ "reason": "extraction_error", "label": "eligible",
+  "input":     { "companyId": "x.example", "role": "retailer", "intentConfirmed": null, "sourceRefs": ["..."] },
+  "corrected": { "companyId": "x.example", "role": "importer", "intentConfirmed": null, "sourceRefs": ["..."] } }
+```
+
+学习、冲突检测和 holdout 评估一律使用核实后的事实（有 `corrected` 用它，否则用 `input`）；`extraction_error` 记录不会成为"该角色不对"的证据，但核实为合格的角色会像正例一样阻止对该角色的排除。没有 `corrected` 字段的旧记录行为不变。
+
+## 审计链校验
+
+`node src/cli.mjs audit --client /private/owner-client.json` 重算整条审计哈希链，返回 `{ok, count, headHash}`，或 `ok:false` 加 `reason`（`sequence_gap` / `broken_link` / `hash_mismatch` / `head_mismatch`）。`status` 也会附带该结果。它能发现单条修改、中间删除和尾部截断；**不能**防止拥有数据库写权限的管理员重写整条链（见 SECURITY.md）。
 
 ## 候选、审批、发布的输入
 

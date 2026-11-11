@@ -29,9 +29,17 @@ export function policy(v) {
   insist(typeof v.requireIntent === 'boolean', 'INVALID_POLICY', 'requireIntent must be boolean');
   return { allowedRoles: [...v.allowedRoles].sort(), requireIntent: v.requireIntent };
 }
+/** Case-fold and drop a trailing dot / leading "www." so trivial variants cannot bypass independence checks.
+ *  Sub-domains and corporate groups are NOT collapsed (no public-suffix list); the labeler still owns that. */
+export function normalizeCompanyId(id) {
+  let v = id.trim().toLowerCase();
+  if (v.endsWith('.')) v = v.slice(0, -1);
+  if (v.startsWith('www.') && v.length > 4) v = v.slice(4);
+  return v;
+}
 export function buyer(v) {
   object(v, ['companyId', 'role', 'intentConfirmed', 'sourceRefs']);
-  const companyId = text(v.companyId, 'canonical company id', 200).toLowerCase();
+  const companyId = normalizeCompanyId(text(v.companyId, 'canonical company id', 200));
   insist(/^[a-z0-9][a-z0-9._:-]*$/.test(companyId), 'INVALID_COMPANY', 'Use a stable, normalized company id (usually its domain)');
   insist([...ROLES, 'unknown'].includes(v.role), 'INVALID_BUYER', 'Unsupported buyer role');
   insist(v.intentConfirmed === null || typeof v.intentConfirmed === 'boolean', 'INVALID_BUYER', 'Intent must be true, false, or null');
@@ -44,24 +52,36 @@ export function classify(p, b) {
   if (p.requireIntent && b.intentConfirmed !== true) return { label: 'needs_review', reason: 'intent_not_confirmed' };
   return { label: 'eligible', reason: 'matches_current_target_profile' };
 }
+/** The human-verified facts about a case: the corrected input when the model's extraction was wrong, else the run input.
+ *  Records written before v0.2 have no `corrected`, so they fall back to `input` unchanged. */
+export const truthOf = r => r.corrected ?? r.input;
 export function observation(v) {
-  object(v, ['id', 'caseId', 'input', 'label', 'reason', 'split', 'kind', 'evidence']);
+  object(v, ['id', 'caseId', 'input', 'label', 'reason', 'split', 'kind', 'evidence', 'corrected'], ['id', 'caseId', 'input', 'label', 'reason', 'split', 'kind', 'evidence']);
   identifier(v.id); identifier(v.caseId);
   const input = buyer(v.input);
   insist(LABELS.includes(v.label), 'INVALID_LABEL', 'Unsupported reviewer label');
-  insist(['wrong_buyer_role', 'suitable_buyer', 'intent_not_verified', 'other'].includes(v.reason), 'INVALID_REASON', 'Unsupported correction reason');
+  insist(['wrong_buyer_role', 'suitable_buyer', 'intent_not_verified', 'extraction_error', 'other'].includes(v.reason), 'INVALID_REASON', 'Unsupported correction reason');
   insist(['train', 'holdout'].includes(v.split), 'INVALID_SPLIT', 'Use train or holdout');
   insist(['real', 'synthetic'].includes(v.kind), 'INVALID_KIND', 'Use real or synthetic');
+  // `input` must equal what the model actually ran with. A human who finds the model mis-extracted the buyer supplies the
+  // verified facts in `corrected`, so an extraction error is never mistaken for a wrong screening policy.
+  let corrected;
+  if (v.corrected !== undefined) {
+    insist(v.reason === 'extraction_error', 'INVALID_CORRECTION', 'corrected input is only allowed with reason extraction_error');
+    corrected = buyer(v.corrected);
+    insist(corrected.companyId === input.companyId, 'INVALID_CORRECTION', 'Correction cannot change the company');
+    insist(digest(corrected) !== digest(input), 'INVALID_CORRECTION', 'Correction is identical to the run input');
+  } else insist(v.reason !== 'extraction_error', 'INVALID_CORRECTION', 'extraction_error requires the corrected input');
   object(v.evidence, ['ref', 'text']);
   const evidence = { ref: text(v.evidence.ref, 'evidence ref', 1000), text: text(v.evidence.text, 'source evidence', 12000) };
   // Do not copy common credential formats into the learning corpus.
   insist(!/(?:-----BEGIN [A-Z ]*PRIVATE KEY-----|\b(?:sk|ghp|github_pat)[-_][A-Za-z0-9_\-]{16,}|\b(?:password|api[_ -]?key|access[_ -]?token)\s*[:=]\s*\S+)/i.test(evidence.text), 'SECRET_DETECTED', 'Remove credentials before importing evidence');
-  return { ...v, input, evidence, evidenceHash: digest(evidence.text) };
+  return { ...v, input, ...(corrected ? { corrected } : {}), evidence, evidenceHash: digest(evidence.text) };
 }
 export function measure(p, rows) {
   const out = { total: rows.length, correct: 0, eligible: 0, truePositive: 0, falsePositive: 0, needsReview: 0 };
   for (const r of rows) {
-    const answer = classify(p, r.input).label;
+    const answer = classify(p, truthOf(r)).label;
     out.correct += Number(answer === r.label);
     out.eligible += Number(r.label === 'eligible');
     out.truePositive += Number(answer === 'eligible' && r.label === 'eligible');
